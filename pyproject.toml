@@ -1,0 +1,25 @@
+# MIT License © 2025 Motohiro Suzuki
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qsp"
+version = "0.180.0"
+description = "QSP Stage180 SDK (minimal, fail-closed, misuse-resistant)"
+readme = "README.md"
+
+# ★ 修正点：あなたの環境(3.10.14)に合わせる
+requires-python = ">=3.10"
+
+license = { text = "MIT" }
+authors = [{ name = "Motohiro Suzuki" }]
+dependencies = []
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qsp*"]

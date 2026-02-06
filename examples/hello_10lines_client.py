@@ -1,0 +1,33 @@
+# MIT License © 2025 Motohiro Suzuki
+from qsp.sdk import QspSDK
+from qsp.types import SDKConfig, PolicyHook
+
+
+class StrictPolicy(PolicyHook):
+    policy_id = "strict-v1"
+
+    def allow_mode(self, *, requested, observed):
+        return True if observed is None else (requested == observed)
+
+    def should_rekey(self, *, epoch, bytes_sent, bytes_recv):
+        return False
+
+    def on_failover(self, *, reason, from_mode, to_mode):
+        print(f"[policy] failover: {from_mode} -> {to_mode} reason={reason}")
+
+
+def main() -> None:
+    sdk = QspSDK(cfg=SDKConfig(enable_qkd=True), policy=StrictPolicy())
+    info = sdk.session_start(role="client", peer="127.0.0.1:9000")
+    print(f"[client] started session_id={info.session_id} epoch={info.epoch} mode={info.mode}")
+
+    sdk.send(b"ping")
+    msg = sdk.recv()
+    print(f"[client] recv: {msg.decode('utf-8', errors='replace')}")
+
+    r = sdk.export_key_receipt()
+    print(f"[client] receipt: session_id={r.session_id} epoch={r.epoch} mode={r.mode} chain={r.receipt_chain_hash}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,33 @@
+name: Stage180 SDK Attack CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  attack-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Create virtual environment
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -e .
+
+      - name: Run Attack-04 (Wrong Session ID)
+        run: |
+          source .venv/bin/activate
+          chmod +x attack_scenarios/attack_04_wrong_session_id/run.sh
+          ./attack_scenarios/attack_04_wrong_session_id/run.sh
