@@ -52,7 +52,8 @@ jobs:
           if [[ ! -e "${CANDIDATES[0]}" ]]; then
             echo "[NG] run.sh not found for attack_${IDX} under attack_scenarios/"
             echo "Expected: attack_scenarios/attack_${IDX}_*/run.sh"
-            echo "Existing run.sh:"
+            echo "Existing attack_scenarios tree:"
+            ls -la attack_scenarios || true
             find attack_scenarios -maxdepth 2 -type f -name run.sh -print || true
             exit 1
           fi
