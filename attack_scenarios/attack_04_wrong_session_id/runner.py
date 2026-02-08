@@ -10,10 +10,13 @@ Mechanism:
 - victim.recv() must raise WrongSessionID (FailClosed subclass).
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import struct
 import hashlib
+from collections import deque
 
 # --- Force imports to use THIS repo (stage181), not other editable installs ---
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -65,16 +68,31 @@ def pack_app_frame(sid: int, payload: bytes) -> bytes:
 
 
 def wire_handshake_state(sdk: QspSDK, *, sid: int) -> None:
-    """Force SDK into post-handshake state without TCP."""
+    """Force SDK into post-handshake state without TCP (CI parity)."""
     sdk._started = True
     sdk._handshake_complete = True
     sdk._session_id = sid
     sdk._epoch = 1
     sdk._mode = "PQC_ONLY"
 
-    # Stage181 replay cache must exist for recv() path
+    # ---- Replay detection state (Stage181) ----
+    # CI では recv() パスが「未初期化扱い」になることがあるため、
+    # 可能性のある内部状態を“全部”埋めてパリティを確保する。
     sdk._replay_cache = set()
 
+    # limit name observed in your local error: _replay_cache_limit
+    if not hasattr(sdk, "_replay_cache_limit") or getattr(sdk, "_replay_cache_limit") is None:
+        sdk._replay_cache_limit = 1024  # safe default (must be > 0)
+
+    # some implementations also keep FIFO order for eviction
+    if not hasattr(sdk, "_seen_app_frame_order") or getattr(sdk, "_seen_app_frame_order") is None:
+        sdk._seen_app_frame_order = deque(maxlen=int(sdk._replay_cache_limit))
+
+    # If implementation uses a separate container name, seed it too (harmless if unused)
+    if not hasattr(sdk, "_seen_app_frame_hashes") or getattr(sdk, "_seen_app_frame_hashes") is None:
+        sdk._seen_app_frame_hashes = set()
+
+    # ---- Other post-handshake internals used by recv() / receipts ----
     sdk._transcript_hasher = hashlib.sha256()
     sdk._receipt_chain_hash = hashlib.sha256(str(sid).encode()).hexdigest()
 
