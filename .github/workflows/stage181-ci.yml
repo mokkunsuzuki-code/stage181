@@ -22,6 +22,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ★ 必ず最初に Python を用意する
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Diagnostics (tree + versions)
         shell: bash
         run: |
@@ -34,32 +40,23 @@ jobs:
           which python || true
           echo "--- git ---"
           git rev-parse --short HEAD || true
-          echo "--- attack_scenarios tree ---"
+          echo "--- attack_scenarios ---"
           ls -la attack_scenarios || true
           find attack_scenarios -maxdepth 2 -type f -name run.sh -print || true
           echo "--- workflows ---"
           ls -la .github/workflows || true
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Install (editable)
         shell: bash
         run: |
           set -euo pipefail
-          python -V
           python -m pip install --upgrade pip
           python -m pip install -e .
-          echo "--- pip freeze (top) ---"
-          python -m pip freeze | head -n 80
-
-      - name: Sanity import qsp
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -c "import qsp; import qsp.sdk; print('qsp ok:', qsp.__file__); print('sdk ok:', qsp.sdk.__file__)"
+          python - <<'PY'
+import qsp, qsp.sdk
+print("qsp:", qsp.__file__)
+print("sdk:", qsp.sdk.__file__)
+PY
 
       - name: Run attack via run.sh (auto-discover)
         shell: bash
@@ -79,11 +76,9 @@ jobs:
 
           CANDIDATES=(attack_scenarios/attack_${IDX}_*/run.sh)
           echo "[info] candidates: ${CANDIDATES[*]}"
+
           if [[ ! -e "${CANDIDATES[0]}" ]]; then
-            echo "[NG] run.sh not found for attack_${IDX} under attack_scenarios/"
-            echo "Expected: attack_scenarios/attack_${IDX}_*/run.sh"
-            echo "Existing attack_scenarios tree:"
-            ls -la attack_scenarios || true
+            echo "[NG] run.sh not found"
             find attack_scenarios -maxdepth 2 -type f -name run.sh -print || true
             exit 1
           fi
@@ -91,7 +86,7 @@ jobs:
           TARGET="${CANDIDATES[0]}"
           echo "[info] executing: $TARGET"
           chmod +x "$TARGET"
-          "$TARGET"
+          bash "$TARGET"
 
       - name: Upload reports (if any)
         if: always()
