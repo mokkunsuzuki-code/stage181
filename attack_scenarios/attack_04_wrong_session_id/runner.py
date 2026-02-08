@@ -1,149 +1,117 @@
 # MIT License © 2025 Motohiro Suzuki
 """
-Attack-04: Wrong Session ID (Stage181)
+Attack-04: Wrong Session ID
 
-Proof:
-- Inject an APP frame with a different SID into recv()
-- Expected: qsp.errors.WrongSessionID (FailClosed)
+Goal:
+- Prove that receiving an APP frame with a different SID is rejected (fail-closed).
 
-This avoids real TCP so CI is deterministic.
+Mechanism:
+- FakeIO injects a single APP frame whose SID != victim's session_id.
+- victim.recv() must raise WrongSessionID (FailClosed subclass).
 """
 
 import os
 import sys
 import struct
 import hashlib
-import inspect
-import traceback
-from typing import Any, Optional
 
-# Ensure repo root importable
+# --- Force imports to use THIS repo (stage181), not other editable installs ---
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from qsp.errors import WrongSessionID
 from qsp.sdk import QspSDK
+from qsp.errors import WrongSessionID, FailClosed
 from qsp.types import SDKConfig
 
 
-class DummyPolicy:
-    # matches what QspSDK uses in sdk.py
-    def allow_mode(self, *, requested: Any, observed: Any) -> bool:
-        return True
+class AllowAllPolicy:
+    policy_id = "test-allow-all"
 
     def should_rekey(self, *, epoch: int, bytes_sent: int, bytes_recv: int) -> bool:
         return False
 
+    def allow_mode(self, *, requested: str, observed: str) -> bool:
+        return True
+
 
 class FakeIO:
-    """
-    Minimal FrameIO-like object:
-      - recv_frame(max_bytes=...) -> bytes
-      - send_frame(frame: bytes)  (not used here)
-    """
+    """Minimal FrameIO replacement for injecting frames."""
+
     def __init__(self, frames: list[bytes]):
         self._frames = list(frames)
-
-    def recv_frame(self, max_bytes: int = 1_048_576) -> bytes:
-        if not self._frames:
-            raise RuntimeError("FakeIO: no more frames")
-        fr = self._frames.pop(0)
-        if len(fr) > max_bytes:
-            raise RuntimeError("FakeIO: frame exceeds max_bytes")
-        return fr
+        self.sent: list[bytes] = []
+        self.closed = False
 
     def send_frame(self, frame: bytes) -> None:
-        # not needed for this attack
-        pass
+        self.sent.append(bytes(frame))
+
+    def recv_frame(self, *, max_bytes: int) -> bytes:
+        if self.closed:
+            raise RuntimeError("FakeIO closed")
+        if not self._frames:
+            raise RuntimeError("FakeIO: no more frames")
+        frame = self._frames.pop(0)
+        if len(frame) > max_bytes:
+            raise RuntimeError("FakeIO: frame too large")
+        return frame
+
+    def close(self) -> None:
+        self.closed = True
 
 
-def ok(msg: str) -> None:
-    print(f"[OK] {msg}")
+def pack_app_frame(sid: int, payload: bytes) -> bytes:
+    return struct.pack(">Q", sid) + payload
 
 
-def ng(msg: str) -> None:
-    print(f"[NG] {msg}")
-    raise SystemExit(1)
-
-
-def make_sdk_config() -> SDKConfig:
-    """
-    Create SDKConfig even if fields evolve.
-    We fill common fields by name when present.
-    """
-    sig = inspect.signature(SDKConfig)
-    kwargs = {}
-
-    defaults = {
-        "enable_qkd": False,
-        "key_len": 32,
-        "sig_alg": "ed25519",
-        "kem_alg": "toy_kem",
-        "app_aead": "aes-gcm",
-        "qkd_seed": 1234,
-    }
-    for name, param in sig.parameters.items():
-        if name in defaults:
-            kwargs[name] = defaults[name]
-        elif param.default is not inspect._empty:
-            # leave default
-            pass
-        else:
-            # required but unknown -> safe placeholder
-            # (if this trips, paste the error and we’ll set it properly)
-            kwargs[name] = defaults.get(name, None)
-
-    return SDKConfig(**kwargs)  # type: ignore[arg-type]
-
-
-def wire_handshake_state(sdk: QspSDK, sid: int) -> None:
-    """
-    Force minimal 'handshake complete' state for deterministic unit attack.
-    We set exactly the fields used by recv()/fail-closed paths.
-    """
+def wire_handshake_state(sdk: QspSDK, *, sid: int) -> None:
+    """Force SDK into post-handshake state without TCP."""
     sdk._started = True
     sdk._handshake_complete = True
     sdk._session_id = sid
     sdk._epoch = 1
     sdk._mode = "PQC_ONLY"
 
-    # transcript/receipt are referenced by update paths in sdk.py
+    # Stage181 replay cache must exist for recv() path
+    sdk._replay_cache = set()
+
     sdk._transcript_hasher = hashlib.sha256()
     sdk._receipt_chain_hash = hashlib.sha256(str(sid).encode()).hexdigest()
 
-    # role/peer just for completeness
-    sdk._role = "client"
-    sdk._peer = "127.0.0.1:0000"
-
 
 def main() -> None:
-    cfg = make_sdk_config()
-    policy = DummyPolicy()
+    print("=== attack-04 wrong-session-id ===")
 
-    # This is our "Session B" (victim)
-    victim = QspSDK(cfg=cfg, policy=policy)
+    cfg = SDKConfig(
+        enable_qkd=False,
+        key_len=32,
+        sig_alg="ed25519",
+        kem_alg="toy_kem",
+        app_aead="aes-gcm",
+    )
 
-    sid_victim = 0x1111111111111111
-    sid_attacker = 0x2222222222222222  # different SID
+    victim = QspSDK(cfg=cfg, policy=AllowAllPolicy())
 
-    # Craft an APP frame with wrong SID: 8 bytes SID + payload
-    payload = b"attack-04-wrong-sid"
-    forged_frame = struct.pack(">Q", sid_attacker) + payload
+    sid_expected = 111
+    sid_wrong = 222
+    payload = b"BADSID"
 
-    # Wire deterministic state + inject forged frame into recv path
-    wire_handshake_state(victim, sid=sid_victim)
-    victim._io = FakeIO([forged_frame])
+    bad_frame = pack_app_frame(sid_wrong, payload)
+    fake = FakeIO([bad_frame])
+
+    victim._io = fake
+    wire_handshake_state(victim, sid=sid_expected)
 
     try:
         _ = victim.recv(max_bytes=1_048_576)
-        ng("WrongSessionID was NOT raised (attack succeeded unexpectedly)")
+        print("[NG] wrong session id NOT rejected")
+        sys.exit(1)
     except WrongSessionID:
-        ok("wrong session id rejected (expected)")
+        print("[OK] wrong session id rejected (expected)")
         return
-    except Exception as e:
-        print(traceback.format_exc())
-        ng(f"unexpected exception: {e.__class__.__name__}: {e}")
+    except FailClosed as e:
+        print(f"[NG] unexpected FailClosed: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
