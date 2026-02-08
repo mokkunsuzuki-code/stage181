@@ -1,0 +1,73 @@
+# MIT License © 2025 Motohiro Suzuki
+name: stage181-ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  attack-matrix:
+    name: ${{ matrix.attack }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        attack:
+          - attack-04
+          - attack-07  # Stage181: Replay
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install (editable)
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run attack via run.sh (auto-discover)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== matrix attack: ${{ matrix.attack }} ==="
+
+          N="${{ matrix.attack }}"
+          if [[ "$N" =~ attack-([0-9]{2}) ]]; then
+            IDX="${BASH_REMATCH[1]}"
+          else
+            echo "[NG] invalid matrix key: $N"
+            exit 1
+          fi
+
+          CANDIDATES=(attack_scenarios/attack_${IDX}_*/run.sh)
+          if [[ ! -e "${CANDIDATES[0]}" ]]; then
+            echo "[NG] run.sh not found for attack_${IDX} under attack_scenarios/"
+            echo "Expected: attack_scenarios/attack_${IDX}_*/run.sh"
+            echo "Existing run.sh:"
+            find attack_scenarios -maxdepth 2 -type f -name run.sh -print || true
+            exit 1
+          fi
+
+          TARGET="${CANDIDATES[0]}"
+          echo "[info] executing: $TARGET"
+          chmod +x "$TARGET"
+          "$TARGET"
+
+      - name: Upload reports (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ matrix.attack }}
+          path: |
+            out/reports/**
+            out/**
+          if-no-files-found: ignore
