@@ -22,21 +22,50 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Diagnostics (tree + versions)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== diagnostics ==="
+          pwd
+          ls -la
+          echo "--- python ---"
+          python -V
+          which python || true
+          echo "--- git ---"
+          git rev-parse --short HEAD || true
+          echo "--- attack_scenarios tree ---"
+          ls -la attack_scenarios || true
+          find attack_scenarios -maxdepth 2 -type f -name run.sh -print || true
+          echo "--- workflows ---"
+          ls -la .github/workflows || true
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install (editable)
+        shell: bash
         run: |
           set -euo pipefail
+          python -V
           python -m pip install --upgrade pip
           python -m pip install -e .
+          echo "--- pip freeze (top) ---"
+          python -m pip freeze | head -n 80
+
+      - name: Sanity import qsp
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -c "import qsp; import qsp.sdk; print('qsp ok:', qsp.__file__); print('sdk ok:', qsp.sdk.__file__)"
 
       - name: Run attack via run.sh (auto-discover)
         shell: bash
         run: |
           set -euo pipefail
+          set -x
 
           echo "=== matrix attack: ${{ matrix.attack }} ==="
 
@@ -49,6 +78,7 @@ jobs:
           fi
 
           CANDIDATES=(attack_scenarios/attack_${IDX}_*/run.sh)
+          echo "[info] candidates: ${CANDIDATES[*]}"
           if [[ ! -e "${CANDIDATES[0]}" ]]; then
             echo "[NG] run.sh not found for attack_${IDX} under attack_scenarios/"
             echo "Expected: attack_scenarios/attack_${IDX}_*/run.sh"
