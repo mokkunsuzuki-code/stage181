@@ -7,6 +7,9 @@ This implementation provides:
 - Minimal handshake binding: server sends SID, client adopts SID
 - Session binding for application frames: each APP frame carries SID
 
+Stage181 update:
+- Replay detection for APP frames (duplicate frame within a session) -> ReplayDetected (FailClosed)
+
 Crypto is still stubbed (plaintext). Stage178/179 components will replace internals.
 """
 
@@ -18,6 +21,7 @@ import hashlib
 import secrets
 import time
 import struct
+from collections import deque
 
 from .types import (
     SDKConfig,
@@ -36,6 +40,7 @@ from .errors import (
     EpochViolation,
     TransportError,
     WrongSessionID,
+    ReplayDetected,
 )
 
 from .wire.io_async import FrameIO, listen_and_accept, connect_to, parse_peer
@@ -96,6 +101,11 @@ class QspSDK:
     _peer: Optional[str] = None
     _role: Optional[Role] = None
 
+    # Stage181: replay cache (bounded)
+    _seen_app_frame_hashes: Optional[set[str]] = None
+    _seen_app_frame_order: Optional[deque[str]] = None
+    _replay_cache_size: int = 1024
+
     # -----------------------------------------------------------------
     # (1) session_start
     # -----------------------------------------------------------------
@@ -143,6 +153,10 @@ class QspSDK:
             self._transcript_hasher.update(f"sid:{self._session_id}".encode())
 
             self._receipt_chain_hash = hashlib.sha256(str(self._session_id).encode()).hexdigest()
+
+            # Stage181: init replay cache (per-session)
+            self._seen_app_frame_hashes = set()
+            self._seen_app_frame_order = deque(maxlen=self._replay_cache_size)
 
             self._started = True
             self._handshake_complete = True
@@ -226,6 +240,10 @@ class QspSDK:
 
         try:
             frame = io.recv_frame(max_bytes=max_bytes)
+
+            # Stage181: replay detect (duplicate APP frame bytes within a session)
+            self._check_replay(frame)
+
             sid_got, payload = _unpack_app_frame(frame)
 
             if sid_got != sid_expected:
@@ -314,6 +332,27 @@ class QspSDK:
         h.update(str(self._epoch).encode())
         h.update(self.policy.policy_id.encode())
         self._receipt_chain_hash = h.hexdigest()
+
+    def _check_replay(self, frame: bytes) -> None:
+        """
+        Stage181: detect duplicate APP frames within a session.
+        Deterministic & bounded memory (FIFO eviction).
+        """
+        if self._seen_app_frame_hashes is None or self._seen_app_frame_order is None:
+            # If state is missing, treat it as fail-closed (security-relevant corruption)
+            self._fail_closed(FailClosed("replay cache missing"))
+
+        fh = hashlib.sha256(frame).hexdigest()
+        if fh in self._seen_app_frame_hashes:
+            self._fail_closed(ReplayDetected("duplicate app frame detected"))
+
+        # Insert into bounded cache
+        if len(self._seen_app_frame_order) >= self._seen_app_frame_order.maxlen:
+            oldest = self._seen_app_frame_order.popleft()
+            self._seen_app_frame_hashes.discard(oldest)
+
+        self._seen_app_frame_order.append(fh)
+        self._seen_app_frame_hashes.add(fh)
 
     def _close_transport(self) -> None:
         if self._io is not None:
