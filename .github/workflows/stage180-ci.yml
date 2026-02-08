@@ -1,33 +1,14 @@
-name: Stage180 SDK Attack CI
+# MIT License © 2025 Motohiro Suzuki
+name: Stage180 SDK attack CI (manual)
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
-  attack-test:
+  note:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Create virtual environment
+      - name: Info
         run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          pip install --upgrade pip
-          pip install -e .
-
-      - name: Run Attack-04 (Wrong Session ID)
-        run: |
-          source .venv/bin/activate
-          chmod +x attack_scenarios/attack_04_wrong_session_id/run.sh
-          ./attack_scenarios/attack_04_wrong_session_id/run.sh
+          echo "Stage180 CI is manual-only to avoid double runs during Stage181."
+          echo "Run this workflow manually from GitHub Actions when you want Stage180 verification."
